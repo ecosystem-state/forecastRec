@@ -11,6 +11,7 @@
 #' @param n_years_ahead How many years ahead to forecast (defaults to 1)
 #' 1:n_vars variables, and then results are combined and sorted to remove duplicates
 #' @param max_vars The maximum number of variables to include as predictors; defaults to 3
+#' @import tidymodels
 #' @importFrom tidyr pivot_wider
 #' @importFrom dplyr left_join
 #' @importFrom broom tidy
@@ -47,131 +48,139 @@ univariate_forecast = function(response,
                                n_years_ahead = 1,
                                max_vars = 3) {
 
-  if(any(class(predictors) == "data.frame")) {
-  } else {
-    stop("Error: predictors object must be a dataframe")
-  }
-  # create a dataframe of predictors
-  pred_names = names(predictors)
-  time_col = which(names(predictors)=="time")
-
-  combos = create_df_predictors(names = pred_names[which(pred_names!="time")],
-                                n_vars = max_vars)
-  if(class(combos)=="character") {
-    # catch the case where a single character is returned
-    combos = data.frame(cov1 = pred_names[which(pred_names!="time")])
+  if (!is.data.frame(predictors) || !is.data.frame(response)) {
+    stop("Error: both response and predictors must be data frames")
   }
 
-  coef_list <- list() # empty list for storing coefficients
-  marginal_pred <- list() # empty list for storing marginal predictions
+  pred_names <- names(predictors)
+  time_col <- which(names(predictors) == "time")
+  combos <- create_df_predictors(names = pred_names[which(pred_names != "time")], n_vars = max_vars)
+  if (class(combos) == "character") {
+    combos <- data.frame(cov1 = pred_names[which(pred_names != "time")])
+  }
 
-  # add progress bar
+  coef_list <- list()
+  marginal_pred <- list()
   progress_bar <- txtProgressBar(min = 0, max = nrow(combos), style = 3, char = "=")
 
-  for(i in 1:nrow(combos)) {
+  for (i in 1:nrow(combos)) {
     setTxtProgressBar(progress_bar, value = i)
+    tmp <- predictors[, c(which(pred_names %in% c(combos[i,], "time")))]
+    sub <- dplyr::left_join(as.data.frame(response[, c("time", "dev")]), tmp, by = "time")
+    names(sub)[3:ncol(sub)] <- paste0("cov", seq(1, length(3:ncol(sub))))
+    covar_names <- names(sub)[3:ncol(sub)]
+    name_df <- data.frame(orig_name = names(tmp)[which(names(tmp) != "time")], new_name = covar_names)
 
-    # keep time and
-    tmp = predictors[,c(which(pred_names %in% c(combos[i,],"time")))]
-    sub = dplyr::left_join(as.data.frame(response[,c("time","dev")]), tmp, by="time")
-    # remove spaces if they exist to help with formula parsing
-
-    names(sub)[3:ncol(sub)] = paste0("cov", seq(1,length(3:ncol(sub))))
-    covar_names = names(sub)[3:ncol(sub)]
-    name_df = data.frame(orig_name = names(tmp)[which(names(tmp) != "time")], new_name = covar_names)
-
-    # Add formulas -- no intercept because rec devs are already standardized, as are predictors
-    if(model_type=="lm") {
-      f <- as.formula(paste("dev",
-                            paste(c("-1",covar_names), collapse = " + "),
-                            sep = " ~ "))
+    if (model_type == "lm") {
+      dummy_f <- as.formula(paste("dev", paste(c("0", covar_names), collapse = " + "), sep = " ~ "))
+      f <- dummy_f # this is to make this compatible with mgcv in tidymodels, dumb workaround
+      model_spec <- linear_reg() |> set_engine("lm") |> set_mode("regression")
+    } else if (model_type == "gam") {
+      covar_names_str <- paste0("s(", covar_names, ",k=4,bs='ps')")
+      dummy_f <- as.formula(paste("dev", paste(c("0", covar_names), collapse = " + "), sep = " ~ ")) # this is just for tidymodels
+      f <- as.formula(paste("dev", paste(c("0", covar_names_str), collapse = " + "), sep = " ~ "))
+      model_spec <- gen_additive_mod() |> set_engine("mgcv")|> set_mode("regression")
+    } else {
+      stop("Unsupported model_type. Use 'lm' or 'gam'")
     }
-    if(model_type=="gam") {
-      covar_names_str = paste0("s(",covar_names,",k=4,bs='ps')")
-      f <- as.formula(paste("dev",
-                            paste(c("-1",covar_names_str), collapse = " + "),
-                            sep = " ~ "))
-    }
+
+    # formula needs to get re-added to drop global intercept
+    # https://stackoverflow.com/questions/69004818/how-to-fit-a-model-without-an-intercept-using-r-tidymodels-workflow
+    recipe <- recipe(dummy_f, data = sub)
+    workflow <- workflow() |>
+      add_recipe(recipe) |>
+      add_model(model_spec, formula = f)
+
     sub$est <- NA
     sub$se <- NA
     sub$train_r2 <- NA
     sub$train_rmse <- NA
     sub$id <- i
-    min_yr <- max(sub$time)-n_forecast+1
+    min_yr <- max(sub$time) - n_forecast + 1
     max_yr <- max(sub$time)
 
-    for(yr in min_yr:max_yr) {
-      sub_dat <- sub[which(sub$time< yr - n_years_ahead + 1),]
-      if(model_type=="lm") fit <- try(lm(f, data = sub_dat), silent=TRUE)
-      if(model_type=="gam") fit <- try(gam(f, data = sub_dat), silent=TRUE)
-      #fit <- lm(z ~ -1 + cov_1:species, data=sub[which(sub$time<yr),])
-      # note -- some of these will be negatively correlated. Sign isn't important and a
-      # all coefficient signs can be flipped
-      if(class(fit)[1] != "try-error") {
-        pred = try(
-          predict(fit, newdata = sub[which(sub$time==yr),], se.fit=TRUE), silent = TRUE)
-        sub$est[which(sub$time==yr)] <- pred$fit
-        sub$se[which(sub$time==yr)] <- pred$se.fit
+    # This is the the leave future out cross validation, which could replace the loop below
+    # The major challenges with implementing this are
+    # 1. tidymodels won't let us generate prediction metrics for the training dataset
+    # 2. tidymodels won't return things like standard errors on predictions (for training or test data)
+    # kfold_splits <- rsample::rolling_origin(data = sub,
+    #                                   initial = min_yr - 1, #
+    #                                   assess = 1)
+    # # Fit the workflow to each resample
+    # resample_results <- fit_resamples(
+    #   workflow,
+    #   resamples = kfold_splits,
+    #   metrics = metric_set(rmse, rsq),
+    #   control = control_resamples(save_pred = TRUE)
+    # )
+    # predictions
+    # predictions <- resample_results %>%
+    #   collect_predictions()
+    # Collect the metrics
+    # metrics <- resample_results %>%
+    #   collect_metrics(summarize=FALSE) # if TRUE, averaged across slices
 
-        # add training r2 and training rmse
-        pred = try(predict(fit, sub_dat), silent = TRUE)
-        if(class(pred)[1] != "try-error") {
-          sub$train_r2[which(sub$time==yr)] <- cor(c(sub_dat$dev), pred, use = "pairwise.complete.obs") ^ 2
-          sub$train_rmse[which(sub$time==yr)] <- sqrt(mean((c(sub_dat$dev) - pred)^2, na.rm=T))
+    for (yr in min_yr:max_yr) {
+      sub_dat <- sub[which(sub$time < yr - n_years_ahead + 1),]
+      fit <- try(fit(workflow, data = sub_dat), silent = TRUE)
+
+      if (class(fit)[1] != "try-error") {
+        # predict the mean
+        pred <- try(predict(fit, new_data = sub[which(sub$time == yr),]), silent = TRUE)
+        sub$est[which(sub$time == yr)] <- pred$.pred
+        # predict SEs
+        pred <- try(predict(fit, new_data = sub[which(sub$time == yr),], type = "conf_int"), silent = TRUE)
+        sub$se[which(sub$time == yr)] <- (pred$.pred_upper - pred$.pred_lower) / 2
+
+        # predict the mean of the training data
+        pred_train <- try(predict(fit, sub_dat), silent = TRUE)
+        # calculate the rmse and r2 for the training data
+        if (class(pred_train)[1] != "try-error") {
+          sub$train_r2[which(sub$time == yr)] <- cor(c(sub_dat$dev), pred_train$.pred, use = "pairwise.complete.obs") ^ 2
+          sub$train_rmse[which(sub$time == yr)] <- sqrt(mean((c(sub_dat$dev) - pred_train$.pred)^2, na.rm = TRUE))
         }
-        # save coefficients
-        if(yr == min_yr) {
-          coefs <- broom::tidy(fit)
-          coefs$yr <- yr
-          coefs$orig_cov = name_df$orig_name
+
+        coefs <- broom::tidy(fit$fit$fit)
+        coefs$yr <- yr
+        coefs$orig_cov <- name_df$orig_name
+
+        if (yr == min_yr) {
+          all_coefs <- coefs
         } else {
-          tmp_coefs <- broom::tidy(fit)
-          tmp_coefs$yr <- yr
-          tmp_coefs$orig_cov = name_df$orig_name
-          coefs <- rbind(coefs, tmp_coefs)
+          all_coefs <- rbind(all_coefs, coefs)
         }
 
-        # save marginal predictions
-        for(ii in 1:length(covar_names)) {
-          marg <- ggpredict(fit,covar_names[ii])
+        marg_all <- data.frame()
+        for (ii in 1:length(covar_names)) {
+          marg <- ggpredict(fit$fit$fit, covar_names[ii])
           marg$year <- yr
           marg$cov <- name_df$orig_name[ii]
           marg$orig_cov <- name_df$orig_name[ii]
-          if(ii == 1) {
-            marg_pred <- marg
-          } else {
-            marg_pred <- rbind(marg_pred, marg)
-          }
-        }
-        if(yr == min_yr) {
-          marg_all <- marg_pred
-        } else {
-          marg_all <- rbind(marg_all, marg_pred)
+          marg_all <- rbind(marg_all, marg)
         }
       }
     }
-    marginal_pred[[i]] <- marg_all
-    coef_list[[i]] <- coefs
 
-    if(i==1) {
+    marginal_pred[[i]] <- marg_all
+    coef_list[[i]] <- all_coefs
+
+    if (i == 1) {
       out_df <- sub
     } else {
-      # find missing covariates if applicable
-      missing_covars = names(out_df)[which(names(out_df) %in% names(sub) == FALSE)]
-      if(length(missing_covars) > 0) {
-        for(mm in 1:length(missing_covars)) {
-          sub[[missing_covars[mm]]] = NA
+      missing_covars <- names(out_df)[which(names(out_df) %in% names(sub) == FALSE)]
+      if (length(missing_covars) > 0) {
+        for (mm in 1:length(missing_covars)) {
+          sub[[missing_covars[mm]]] <- NA
         }
       }
       out_df <- rbind(out_df, sub)
     }
   }
 
-  combos$id <- seq(1,nrow(combos))
+  combos$id <- seq(1, nrow(combos))
   out <- list("pred" = out_df,
-              "vars"=combos,
+              "vars" = combos,
               "coefs" = coef_list,
               "marginal" = marginal_pred)
   return(out)
 }
-
