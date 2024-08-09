@@ -45,13 +45,12 @@ The returned object is a list with 4 elements
 names(lm_example)
 ```
 
-These elements are
+These elements include
 * pred, a dataframe consisting of our original data, with responses and covariates binded together. Also includes model predictions `est`, uncertainty `se` and several metrics describing the fit to the training data (`train_r2` and `train_rmse`). 
-* vars, a dataframe containing the combination of each unique set of covariates included, ranging from 1 to `max_vars`
 * coefs, a list containing coefficients elements for each model that was fit. For models with `n_forecast` larger than 1, a set of coefficients will be returned for each year that is used as a holdout datapoint. For the above example, we can look at 
 
 ```{r}
-lm_example$coefs[[1]]
+lm_example$coefs
 ```
 
 and see that there are 10 sets of the 3 coefficients, along with standard errors and p-values for each (`yr` ranging from 31 to 40). 
@@ -61,17 +60,8 @@ and see that there are 10 sets of the 3 coefficients, along with standard errors
 Using the above example output, we can plot the marginal effects for the first model, 
 
 ```{r}
-marg <- lm_example$marginal[[1]]
-
-# focus on the marginal effects for the full dataset
-marg <- dplyr::filter(marg, year == max(marg$year))
-
-ggplot(marg, aes(x, predicted)) + 
-  geom_ribbon(aes(ymin=conf.low, ymax = conf.high)) + 
-  geom_line() + 
-  facet_wrap(~cov, scale="free", nrow=2) + 
-  ylab("Marginal effect") + 
-  xlab("Covariate")
+marg <- lm_example$marginals
+marg
 ```
 
 ## Non-parametric examples

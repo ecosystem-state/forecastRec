@@ -12,13 +12,19 @@
 #' 1:n_vars variables, and then results are combined and sorted to remove duplicates
 #' @param max_vars The maximum number of variables to include as predictors; defaults to 3
 #' @import tidymodels
+#' @importFrom parsnip set_mode set_engine linear_reg gen_additive_mod fit
+#' @importFrom rsample rolling_origin training testing
+#' @importFrom recipes recipe
+#' @importFrom purrr map2 pluck map_dbl map_df
+#' @importFrom workflows add_model add_recipe workflow extract_fit_parsnip
 #' @importFrom tidyr pivot_wider
-#' @importFrom dplyr left_join
+#' @importFrom dplyr left_join bind_cols
 #' @importFrom broom tidy
 #' @importFrom ggeffects ggpredict
 #' @importFrom stats lm as.formula predict cor model.matrix na.pass
 #' @importFrom mgcv gam
 #' @importFrom utils txtProgressBar setTxtProgressBar
+#' @importFrom tibble tibble
 #'
 #' @export
 #'
@@ -91,96 +97,132 @@ univariate_forecast = function(response,
       add_recipe(recipe) |>
       add_model(model_spec, formula = f)
 
-    sub$est <- NA
-    sub$se <- NA
-    sub$train_r2 <- NA
-    sub$train_rmse <- NA
-    sub$id <- i
     min_yr <- max(sub$time) - n_forecast + 1
     max_yr <- max(sub$time)
 
-    # This is the the leave future out cross validation, which could replace the loop below
-    # The major challenges with implementing this are
-    # 1. tidymodels won't let us generate prediction metrics for the training dataset
-    # 2. tidymodels won't return things like standard errors on predictions (for training or test data)
-    # kfold_splits <- rsample::rolling_origin(data = sub,
-    #                                   initial = min_yr - 1, #
-    #                                   assess = 1)
-    # # Fit the workflow to each resample
-    # resample_results <- fit_resamples(
-    #   workflow,
-    #   resamples = kfold_splits,
-    #   metrics = metric_set(rmse, rsq),
-    #   control = control_resamples(save_pred = TRUE)
-    # )
-    # predictions
-    # predictions <- resample_results %>%
-    #   collect_predictions()
-    # Collect the metrics
-    # metrics <- resample_results %>%
-    #   collect_metrics(summarize=FALSE) # if TRUE, averaged across slices
+    kfold_splits <- rolling_origin(data = sub, initial = min_yr-1, assess = n_years_ahead)
 
-    for (yr in min_yr:max_yr) {
-      sub_dat <- sub[which(sub$time < yr - n_years_ahead + 1),]
-      fit <- try(fit(workflow, data = sub_dat), silent = TRUE)
+    # Function to fit a model, predict and calculate RMSE, coefficients, SEs, and marginal effects
+    fit_model <- function(split, slice_id, workflow_input) {
+      train_data <- training(split)
 
-      if (class(fit)[1] != "try-error") {
-        # predict the mean
-        pred <- try(predict(fit, new_data = sub[which(sub$time == yr),]), silent = TRUE)
-        sub$est[which(sub$time == yr)] <- pred$.pred
-        # predict SEs
-        pred <- try(predict(fit, new_data = sub[which(sub$time == yr),], type = "conf_int"), silent = TRUE)
-        sub$se[which(sub$time == yr)] <- (pred$.pred_upper - pred$.pred_lower) / 2
-
-        # predict the mean of the training data
-        pred_train <- try(predict(fit, sub_dat), silent = TRUE)
-        # calculate the rmse and r2 for the training data
-        if (class(pred_train)[1] != "try-error") {
-          sub$train_r2[which(sub$time == yr)] <- cor(c(sub_dat$dev), pred_train$.pred, use = "pairwise.complete.obs") ^ 2
-          sub$train_rmse[which(sub$time == yr)] <- sqrt(mean((c(sub_dat$dev) - pred_train$.pred)^2, na.rm = TRUE))
-        }
-
-        coefs <- broom::tidy(fit$fit$fit)
-        coefs$yr <- yr
-        coefs$orig_cov <- name_df$orig_name
-
-        if (yr == min_yr) {
-          all_coefs <- coefs
-        } else {
-          all_coefs <- rbind(all_coefs, coefs)
-        }
-
-        marg_all <- data.frame()
-        for (ii in 1:length(covar_names)) {
-          marg <- ggpredict(fit$fit$fit, covar_names[ii])
-          marg$year <- yr
-          marg$cov <- name_df$orig_name[ii]
-          marg$orig_cov <- name_df$orig_name[ii]
-          marg_all <- rbind(marg_all, marg)
-        }
+      if(n_years_ahead == 0) {
+        test_data <- train_data
+      } else {
+        test_data <- testing(split)
       }
+
+      # Fit the workflow to the training data
+      fitted_workflow <- workflow_input |> fit(data = train_data)
+
+      # Extract the fitted model from the workflow
+      model <- fitted_workflow |> extract_fit_parsnip() |> pluck("fit")
+
+      # Extract model coefficients
+      coefficients <- tidy(model)
+
+      # Predictions and SEs on training data
+      train_preds <- predict(fitted_workflow, new_data = train_data, type = c("numeric"))#predict(fitted_workflow, new_data = train_data) |>
+      ci <- predict(fitted_workflow, new_data = train_data, type = c("conf_int"))
+      train_preds <- bind_cols(train_preds, ci)
+      train_rmse <- sqrt(mean((train_data$dev - train_preds$.pred)^2))
+      train_r2 <- cor(train_data$dev, train_preds$.pred, use="pairwise.complete.obs") ^ 2
+
+      # Predictions and SEs on assessment data
+      test_preds <- predict(fitted_workflow, new_data = test_data, type = c("numeric"))
+      ci <- predict(fitted_workflow, new_data = test_data, type = c("conf_int"))
+      test_preds <- bind_cols(test_preds, ci)
+      test_rmse <- sqrt(mean((test_data$dev - test_preds$.pred)^2))
+      test_r2 <- cor(test_data$dev, test_preds$.pred, use="pairwise.complete.obs") ^ 2
+
+      # Marginal effects for all covariates
+      marg_all <- data.frame()
+      for (ii in 1:length(covar_names)) {
+        marg <- ggpredict(model, covar_names[ii])
+        marg$slice_id <- slice_id
+        marg$cov <- name_df$orig_name[ii]
+        marg$orig_cov <- name_df$orig_name[ii]
+        marg_all <- rbind(marg_all, marg)
+      }
+
+      list(
+        model = model,
+        coefficients = coefficients,
+        train_rmse = train_rmse,
+        test_rmse = test_rmse,
+        train_r2 = train_r2,
+        test_r2 = test_r2,
+        train_preds = tibble(index = rownames(train_data),
+                             pred = train_preds$.pred,
+                             pred_lower = train_preds$.pred_lower,
+                             pred_upper = train_preds$.pred_upper,
+                             #se = train_preds$.pred_lower,
+                             slice_id = slice_id,
+                             time = train_data$time,
+                             type = "train"),
+        test_preds = tibble(index = rownames(test_data),
+                            pred = test_preds$.pred,
+                            pred_lower = test_preds$.pred_lower,
+                            pred_upper = test_preds$.pred_upper,
+                            slice_id = slice_id,
+                            time = test_data$time,
+                            type = "test"),
+        marginal_effects = marg_all
+      )
     }
 
-    marginal_pred[[i]] <- marg_all
-    coef_list[[i]] <- all_coefs
+    # Apply the function to each fold and collect results
+    results <- map2(kfold_splits$splits, seq_along(kfold_splits$splits), ~ fit_model(.x, .y, workflow))
 
-    if (i == 1) {
-      out_df <- sub
+    # Extract RMSE and R2 values for train and test data
+    train_rmse_values <- map_dbl(results, "train_rmse")
+    test_rmse_values <- map_dbl(results, "test_rmse")
+    train_r2_values <- map_dbl(results, "train_r2")
+    test_r2_values <- map_dbl(results, "test_r2")
+
+    # Combine predictions with original data
+    train_preds <- map_df(results, "train_preds")
+    test_preds <- map_df(results, "test_preds")
+
+    # Combine coefficients and marginal effects
+    coefficients <- map_df(results, "coefficients", .id = "slice_id")
+    marginal_effects <- map_df(results, "marginal_effects")
+
+    # Merge the predictions back to the original data frame
+    combined_preds <- rbind(train_preds, test_preds)
+    dat_with_preds <- sub |> left_join(combined_preds, by = "time")
+    indx <- which(names(combos) %in% names(dat_with_preds) == FALSE)
+    if(length(indx) > 0) {
+      for(ii in 1:length(indx)) dat_with_preds[[names(combos)[indx[ii]]]] <- NA
+    }
+    # print(train_rmse_values) # Print the RMSE values
+    # print(test_rmse_values) # Print the RMSE values
+    # print(dat_with_preds)# Print the data with predictions
+    # print(coefficients)# Print coefficients
+    # print(marginal_effects)# Print marginal effects
+
+    # Extract RMSE values for train and test data
+    summary_df <- data.frame(i = i, train_rmse_values = train_rmse_values,
+                             test_rmse_values = test_rmse_values,
+                             train_r2_values = train_r2_values,
+                             test_r2_values = test_r2_values)
+    dat_with_preds$i <- i
+    coefficients$i <- i
+    marginal_effects$i <- i
+
+    if(i == 1) {
+      all_preds <- dat_with_preds
+      summary <- summary_df
+      all_coefficients <- coefficients
+      all_marginal_effects <- marginal_effects
     } else {
-      missing_covars <- names(out_df)[which(names(out_df) %in% names(sub) == FALSE)]
-      if (length(missing_covars) > 0) {
-        for (mm in 1:length(missing_covars)) {
-          sub[[missing_covars[mm]]] <- NA
-        }
-      }
-      out_df <- rbind(out_df, sub)
+      all_preds <- rbind(all_preds, dat_with_preds)
+      summary <- rbind(summary, summary_df)
+      all_coefficients <- rbind(all_coefficients, coefficients)
+      all_marginal_effects <- rbind(all_marginal_effects, marginal_effects)
     }
+
   }
 
-  combos$id <- seq(1, nrow(combos))
-  out <- list("pred" = out_df,
-              "vars" = combos,
-              "coefs" = coef_list,
-              "marginal" = marginal_pred)
-  return(out)
+  return(list(pred = all_preds, summary = summary, coefs = all_coefficients, marginals = all_marginal_effects))
 }
