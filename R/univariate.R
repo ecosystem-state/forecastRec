@@ -16,9 +16,9 @@
 #' @importFrom rsample rolling_origin training testing
 #' @importFrom recipes recipe
 #' @importFrom tune control_resamples fit_resamples
-#' @importFrom purrr map2 pluck map_dbl map_df
+#' @importFrom purrr map_dfr map_dbl
 #' @importFrom workflows add_model add_recipe workflow extract_fit_parsnip
-#' @importFrom tidyr pivot_wider
+#' @importFrom tidyr pivot_longer
 #' @importFrom dplyr left_join bind_cols
 #' @importFrom broom tidy
 #' @importFrom ggeffects ggpredict
@@ -121,7 +121,7 @@ univariate_forecast = function(response,
 
     control <- control_resamples(save_pred = TRUE, extract = fit_model)
 
-    results <- suppressWarnings(fit_resamples(workflow,
+    results <- suppressMessages(fit_resamples(workflow,
                              resamples = kfold_splits,
                              metrics = metric_set(rmse, rsq),
                              control = control))
@@ -147,7 +147,7 @@ univariate_forecast = function(response,
                                .config = test_values$.config[1]) %>%
       arrange(id, .metric)
     train_values$type <- "train"
-
+print(i)
     # coefficients from training models
     coefficients <- map_dfr(results$.extracts, function(df) {
       # Extract the coefficients directly from the nested structure
