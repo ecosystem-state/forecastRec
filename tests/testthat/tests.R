@@ -15,7 +15,7 @@ test_that("1D linear model works", {
        max_vars = 3)
   expect_equal("pred", names(lm_example)[1])
   expect_equal("summary", names(lm_example)[2])
-  expect_equal("coefs", names(lm_example)[3])
+  expect_equal("covariate_combos", names(lm_example)[3])
 
   sub <- predictors[1:40,]
   sub$dev <- response$dev[1:40]
@@ -23,15 +23,15 @@ test_that("1D linear model works", {
   pred <- predict(f, newdata=predictors[40,1:3])
 
   predicted <- lm_example$pred |>
-    dplyr::filter(i==1, type=="test", time==40)
+    dplyr::filter(i==1, time==40)
 
-  expect_equal(predicted$pred, as.numeric(pred), tolerance = 0.001)
+  expect_equal(predicted$.pred, as.numeric(pred), tolerance = 0.001)
 
   # Evaluate 1-step ahead comparisons
   lm_example <- univariate_forecast(response,
                                     predictors,
                                     model_type = "lm",
-                                    n_forecast = 1,
+                                    n_forecast = 3,
                                     n_years_ahead = 1,
                                     max_vars = 3)
   sub <- predictors[1:39,]
@@ -59,33 +59,22 @@ test_that("1D gam model works", {
                                     max_vars = 3)
 
   predicted <- gam_example$pred |>
-    dplyr::filter(i==1, type=="test", time==40)
+    dplyr::filter(i==1, time==40)
 
-  expect_equal(predicted$pred, -0.08842347, tolerance = 0.001)
+  expect_equal(predicted$.pred, -0.08842347, tolerance = 0.001)
 
   set.seed(123)
   gam_example <- univariate_forecast(response,
                                      predictors,
                                      model_type = "gam",
                                      n_forecast = 4,
-                                     n_years_ahead = 0,
+                                     n_years_ahead = 1,
                                      max_vars = 3)
 
   predicted <- gam_example$pred |>
-    dplyr::filter(i==1, type=="test", time > 36, time == 37, slice_id==2)
-  expect_equal(predicted$pred, -0.0003308037, tolerance = 0.001)
+    dplyr::filter(i==1, type=="test")
 
-  predicted <- gam_example$pred |>
-    dplyr::filter(i==1, type=="test", time > 36, time == 38, slice_id==3)
-  expect_equal(predicted$pred, 0.2696979393, tolerance = 0.001)
-
-  predicted <- gam_example$pred |>
-    dplyr::filter(i==1, type=="test", time > 36, time == 39, slice_id==4)
-  expect_equal(predicted$pred, -0.0094620398, tolerance = 0.001)
-
-  predicted <- gam_example$pred |>
-    dplyr::filter(i==1, type=="test", time > 36, time == 40, slice_id==5)
-  expect_equal(predicted$pred, -0.0884234683, tolerance = 0.001)
+  expect_equal(predicted$.pred, c(-0.02539845,0.34157990,0.01230215,-0.07279002))
 
 })
 
