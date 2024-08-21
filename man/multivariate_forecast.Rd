@@ -30,7 +30,7 @@ be "lm", "gam",}
 
 \item{max_vars}{The maximum number of variables to include as predictors; defaults to 3}
 
-\item{formula}{Optional formula for passing to gam(), glmmTMB(), randomForest(), etc.}
+\item{formula}{Optional formula for passing to gam(), lmer(), randomForest(), etc.}
 }
 \value{
 a list containing predictions and the variables used in making predictions

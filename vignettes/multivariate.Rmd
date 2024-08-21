@@ -1,0 +1,147 @@
+---
+title: "Multivariate examples"
+author: "Eric Ward"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Multivariate examples}
+  %\VignetteEngine{knitr::rmarkdown}
+  \usepackage[utf8]{inputenc}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Installation
+
+```{r install, eval=TRUE, warning=FALSE, message=FALSE, results='hide'}
+library(predRecruit)
+library(ggplot2)
+```
+
+In addition to univariate models, this package allows fitting of multivariate models. The exact model specification depends on the model type, but these are described below. 
+
+
+
+### Linear models 
+
+For linear models, we can estimate interactions between species groups and predictors as either fixed factors, or random effects. Fixed factor models are fit with `lm()` and random effects models with `lmer()`. 
+
+Note that the data here consists of an extra column `species` that is used as the grouping variable. 
+
+```{r eval = FALSE}
+set.seed(123)
+
+response <- data.frame(time = 1:40, dev = rnorm(40))
+response$time <- 1:40
+response$species <- sample(
+  c("species_A", "species_B", "species_C"),
+  size = nrow(predictors),
+  replace = T
+)
+
+predictors <- matrix(rnorm(400), ncol = 10)
+predictors <- as.data.frame(predictors)
+predictors$time <- 1:40
+
+lm_example <- multivariate_forecast(
+  response,
+  predictors,
+  model_type = "lm",
+  n_forecast = 0,
+  n_years_ahead = 0,
+  max_vars = 2
+)
+expect_equal("pred", names(lm_example)[1])
+expect_equal("summary", names(lm_example)[2])
+expect_equal("covariate_combos", names(lm_example)[3])
+
+# Evaluate 1-step ahead comparisons
+lm_example <- multivariate_forecast(
+  response,
+  predictors,
+  model_type = "lm",
+  n_forecast = 5,
+  n_years_ahead = 1,
+  max_vars = 2
+)
+```
+
+
+### Generalized additive models
+
+For multivariate GAMs, we use `mgcv` to fit models, with factor smooths as the default. Custom model formulas may be specified with the `formula` argument to `multivariate_forecast()` however. 
+
+```{r eval = FALSE}
+set.seed(123)
+
+response <- data.frame(time = 1:40, dev = rnorm(40))
+response$time <- 1:40
+response$species <- sample(
+  c("speciesA", "speciesB", "speciesC"),
+  size = nrow(response),
+  replace = T
+)
+
+predictors <- matrix(rnorm(400), ncol = 10)
+predictors <- as.data.frame(predictors)
+predictors$time <- 1:40
+
+gam_example <- multivariate_forecast(
+  response,
+  predictors,
+  model_type = "gam",
+  n_forecast = 0,
+  n_years_ahead = 0,
+  max_vars = 2
+)
+
+# Evaluate 1-step ahead comparisons
+gam_example <- multivariate_forecast(
+  response,
+  predictors,
+  model_type = "gam",
+  n_forecast = 5,
+  n_years_ahead = 1,
+  max_vars = 2
+)
+```
+
+### Generalized linear mixed models
+
+```{r eval = FALSE}
+set.seed(123)
+
+response <- data.frame(time = 1:40, dev = rnorm(40))
+response$time <- 1:40
+response$species <- sample(
+  c("speciesA", "speciesB", "speciesC"),
+  size = nrow(response),
+  replace = T
+)
+
+predictors <- matrix(rnorm(400), ncol = 10)
+predictors <- as.data.frame(predictors)
+predictors$time <- 1:40
+
+glmm_example <- multivariate_forecast(
+  response,
+  predictors,
+  model_type = "glmm",
+  n_forecast = 0,
+  n_years_ahead = 0,
+  max_vars = 2
+)
+
+# Evaluate 1-step ahead comparisons
+gam_example <- multivariate_forecast(
+  response,
+  predictors,
+  model_type = "gam",
+  n_forecast = 5,
+  n_years_ahead = 1,
+  max_vars = 2
+)
+```
+

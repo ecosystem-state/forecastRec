@@ -31,14 +31,18 @@ test_that("1D linear model works", {
   lm_example <- univariate_forecast(response,
                                     predictors,
                                     model_type = "lm",
-                                    n_forecast = 3,
+                                    n_forecast = 5,
                                     n_years_ahead = 1,
                                     max_vars = 3)
   sub <- predictors[1:39,]
   sub$dev <- response$dev[1:39]
   f <- lm(dev[1:39] ~ -1 + V1 + V2 + V3, data=sub)
   pred <- predict(f, newdata=predictors[40,1:3])
-  expect_equal(lm_example$pred$pred[40], as.numeric(pred), tolerance = 0.001)
+
+  pred_filtered <- lm_example$pred |>
+    dplyr::filter(i==1, id=="Slice5")
+
+  expect_equal(as.numeric(pred_filtered$.pred[40]), as.numeric(pred), tolerance = 0.001)
 
 })
 
@@ -78,6 +82,96 @@ test_that("1D gam model works", {
 
 })
 
+test_that("multivariate linear model works", {
+  set.seed(123)
+
+  predictors <- matrix(rnorm(400), ncol = 10)
+  predictors <- as.data.frame(predictors)
+  predictors$time <- 1:40
+
+  response <- data.frame(time = 1:40, dev = rnorm(40))
+  response$time <- 1:40
+  response$species <- sample(c("speciesA","speciesB","speciesC"), size=nrow(predictors),
+                             replace=T)
+
+  lm_example <- multivariate_forecast(response,
+                                    predictors,
+                                    model_type = "lm",
+                                    n_forecast = 0,
+                                    n_years_ahead = 0,
+                                    max_vars = 2)
+  expect_equal("pred", names(lm_example)[1])
+  expect_equal("summary", names(lm_example)[2])
+  expect_equal("covariate_combos", names(lm_example)[3])
+
+  # Evaluate 1-step ahead comparisons
+  lm_example <- multivariate_forecast(response,
+                                    predictors,
+                                    model_type = "lm",
+                                    n_forecast = 5,
+                                    n_years_ahead = 1,
+                                    max_vars = 2)
+
+})
+
+
+test_that("multivariate GAM model works", {
+  set.seed(123)
+
+  predictors <- matrix(rnorm(400), ncol = 10)
+  predictors <- as.data.frame(predictors)
+  predictors$time <- 1:40
+
+  response <- data.frame(time = 1:40, dev = rnorm(40))
+  response$time <- 1:40
+  response$species <- sample(c("speciesA","speciesB","speciesC"), size=nrow(response),
+                             replace=T)
+
+  gam_example <- multivariate_forecast(response,
+                                      predictors,
+                                      model_type = "gam",
+                                      n_forecast = 0,
+                                      n_years_ahead = 0,
+                                      max_vars = 2)
+
+  # Evaluate 1-step ahead comparisons
+  gam_example <- multivariate_forecast(response,
+                                       predictors,
+                                       model_type = "gam",
+                                       n_forecast = 5,
+                                       n_years_ahead = 1,
+                                       max_vars = 2)
+
+})
+
+test_that("multivariate GLMM model works", {
+  set.seed(123)
+
+  response <- data.frame(time = 1:40, dev = rnorm(40))
+  response$time <- 1:40
+  response$species <- sample(c("speciesA","speciesB","speciesC"), size=nrow(response),
+                             replace=T)
+
+  predictors <- matrix(rnorm(400), ncol = 10)
+  predictors <- as.data.frame(predictors)
+  predictors$time <- 1:40
+
+  glmm_example <- multivariate_forecast(response,
+                                       predictors,
+                                       model_type = "glmm",
+                                       n_forecast = 0,
+                                       n_years_ahead = 0,
+                                       max_vars = 2)
+
+  # Evaluate 1-step ahead comparisons
+  glmm_example <- multivariate_forecast(response,
+                                       predictors,
+                                       model_type = "glmm",
+                                       n_forecast = 5,
+                                       n_years_ahead = 1,
+                                       max_vars = 2)
+
+})
 #
 # test_that("1D lasso model works", {
 #   set.seed(123)

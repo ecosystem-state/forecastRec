@@ -19,7 +19,7 @@
 #' @importFrom purrr map_dfr map_dbl
 #' @importFrom workflows add_model add_recipe workflow extract_fit_parsnip
 #' @importFrom tidyr pivot_longer
-#' @importFrom dplyr left_join
+#' @importFrom dplyr left_join arrange mutate row_number bind_rows
 #' @importFrom broom tidy
 #' @importFrom stats lm as.formula predict cor
 #' @importFrom mgcv gam
@@ -27,6 +27,7 @@
 #' @importFrom tibble tibble
 #' @importFrom yardstick metric_set rmse rsq
 #' @importFrom ggeffects ggpredict
+#' @importFrom stats terms
 #'
 #' @export
 #'
@@ -118,13 +119,7 @@ univariate_forecast = function(response,
 
       dat_with_preds <- sub
       dat_with_preds$.pred <- pred
-      indx <- which(names(combos) %in% names(dat_with_preds) == FALSE)
-      if(length(indx) > 0) {
-        for(ii in 1:length(indx)) {
-          #coefficients[[names(combos)[indx[ii]]]] <- NA
-          dat_with_preds[[names(combos)[indx[ii]]]] <- NA
-        }
-      }
+
       dat_with_preds$i <- i
 
       # Extract marginals
@@ -132,7 +127,8 @@ univariate_forecast = function(response,
       marg_all <- data.frame()
       for (ii in 1:length(covariate_names)) {
         marg <- ggpredict(fitted_model$fit, covariate_names[ii])
-        marg_all <- rbind(marg_all, marg)
+        marg$cov_name <- covariate_names[ii] # add covariate name
+        marg_all <- bind_rows(marg_all, marg)
       }
       marg_all$i <- i
 
@@ -160,7 +156,8 @@ univariate_forecast = function(response,
         marg_all <- data.frame()
         for (ii in 1:length(covariate_names)) {
           marg <- ggpredict(fitted$fit, covariate_names[ii])
-          marg_all <- rbind(marg_all, marg)
+          marg$cov_name <- covariate_names[ii] # add covariate name
+          marg_all <- bind_rows(marg_all, marg)
         }
 
         return(list(model = fitted$fit$model,
@@ -196,7 +193,7 @@ univariate_forecast = function(response,
                                  .metric = sort(rep(c("rmse","rsq"), length(results$id))),
                                  .estimator = "standard",
                                  .estimate = c(rmse_train_values, rsq_train_values),
-                                 .config = test_values$.config[1]) %>%
+                                 .config = test_values$.config[1]) |>
         arrange(id, .metric)
       train_values$type <- "train"
 
@@ -205,7 +202,7 @@ univariate_forecast = function(response,
         # Extract the coefficients directly from the nested structure
         df$.extracts[[1]]$marginals
       })
-      marg_all$id <- results$id
+
       marg_all$i <- i
 
       # coefficients from training models
@@ -234,8 +231,8 @@ univariate_forecast = function(response,
           # Convert to a tibble and add row identifiers if needed
           pred_obj <- tibble(.pred = pred_obj)
           if (ncol(pred_obj) == 1) {
-            pred_obj <- pred_obj %>%
-              mutate(row = row_number()) %>%
+            pred_obj <- pred_obj |>
+              mutate(row = row_number()) |>
               pivot_wider(names_from = row, values_from = .pred)
           }
         }
@@ -260,19 +257,19 @@ univariate_forecast = function(response,
       #marginal_effects <- map_df(results, "marginal_effects")
 
       # Merge the predictions back to the original data frame
-      combined_preds <- rbind(train_pred, test_pred)
+      combined_preds <- bind_rows(train_pred, test_pred)
       dat_with_preds <- sub |> left_join(combined_preds, by = "time")
-      indx <- which(names(combos) %in% names(dat_with_preds) == FALSE)
-      if(length(indx) > 0) {
-        for(ii in 1:length(indx)) {
-          #coefficients[[names(combos)[indx[ii]]]] <- NA
-          dat_with_preds[[names(combos)[indx[ii]]]] <- NA
-        }
-      }
+      # indx <- which(names(combos) %in% names(dat_with_preds) == FALSE)
+      # if(length(indx) > 0) {
+      #   for(ii in 1:length(indx)) {
+      #     #coefficients[[names(combos)[indx[ii]]]] <- NA
+      #     dat_with_preds[[names(combos)[indx[ii]]]] <- NA
+      #   }
+      # }
       dat_with_preds$i <- i
 
       # Extract RMSE values for train and test data
-      summary_df <- rbind(test_values, train_values)
+      summary_df <- bind_rows(test_values, train_values)
       summary_df$i <- i
     }
     #marginal_effects$i <- i
@@ -283,14 +280,17 @@ univariate_forecast = function(response,
       #all_coefficients <- coefficients
       all_marginal_effects <- marg_all
     } else {
-      all_preds <- rbind(all_preds, dat_with_preds)
-      summary <- rbind(summary, summary_df)
-      #all_coefficients <- rbind(all_coefficients, coefficients)
-      all_marginal_effects <- rbind(all_marginal_effects, marg_all)
+      all_preds <- bind_rows(all_preds, dat_with_preds)
+      summary <- bind_rows(summary, summary_df)
+      #all_coefficients <- bind_rows(all_coefficients, coefficients)
+      all_marginal_effects <- bind_rows(all_marginal_effects, marg_all)
     }
 
   }
 
+  # add a unique idenfier for the marginal effects across variables and folds
+  breaks <- c(1, ifelse(diff(all_marginal_effects$x) < 0, 1, 0))
+  all_marginal_effects$var_fold <- cumsum(breaks)
   return(list(pred = all_preds,
               summary = summary,
               #coefs = all_coefficients,

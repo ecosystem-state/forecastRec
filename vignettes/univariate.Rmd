@@ -25,12 +25,12 @@ library(ggplot2)
 We can fit linear regression and generalized additive models using the `univariate()` function. Here, we'll simulate some dummy data. Our response has 40 time steps, and the matrix of predictors includes 4 potential covariates. 
 
 ```{r results = 'hide', message = FALSE, warning = FALSE}
+set.seed(123)
 response <- data.frame(time = 1:40, dev = rnorm(40))
-
 predictors <- matrix(rnorm(4 * 40), ncol = 4)
-#' #colnames(predictors) = paste0("X",1:ncol(predictors))
 predictors <- as.data.frame(predictors)
 predictors$time <- 1:40
+
 lm_example <- univariate_forecast(response,
   predictors,
   model_type = "lm", # can be 'lm' or 'gam'
@@ -46,22 +46,42 @@ names(lm_example)
 ```
 
 These elements include
-* pred, a dataframe consisting of our original data, with responses and covariates binded together. Also includes model predictions `est`, uncertainty `se` and several metrics describing the fit to the training data (`train_r2` and `train_rmse`). 
-* coefs, a list containing coefficients elements for each model that was fit. For models with `n_forecast` larger than 1, a set of coefficients will be returned for each year that is used as a holdout datapoint. For the above example, we can look at 
+* pred, a dataframe consisting of our original data, with responses and covariates binded together. Also includes model predictions `.pred`, the fold id `id`, the permutation of covariate combinations `i`, and `type` indicating whether the prediction is made for the training or test set. 
+
+* summary, a dataframe containing the fold id `id`, metrics of R-squared and RMSE (label in `.metric`, value in `.estimate`, the permutation of covariate combinations `i`, and `type` indicating whether the prediction is made for the training or test set). These values are calculated on each fold -- so if 1-step ahead forecasts are used, R-squared will be `NA` because each fold's prediction will be correlated with 1 observation in the test set (and a correlation can't be calculated for a single pair of values)  
 
 ```{r}
-lm_example$coefs
+lm_example$summary
 ```
 
-and see that there are 10 sets of the 3 coefficients, along with standard errors and p-values for each (`yr` ranging from 31 to 40). 
+* covariate_combos, a dataframe containing all permutations of the covariates (rows correspond to values of `i` above)
 
-* marginal, also a list with each element specific to a specific model this contains the marginal effects of each parameter and can be useful in identifying non-linear relationships with GAMs. 
-
-Using the above example output, we can plot the marginal effects for the first model, 
+* marginal_effects, a dataframe containing all marginal effects estimated with ggeffects
 
 ```{r}
-marg <- lm_example$marginals
+marg <- lm_example$marginal_effects
 marg
+```
+
+This dataframe contains all marginal effects for all folds (10 above). Let's first look at the predictions for just the first covariate combination. The column `var_fold` represents a unique combination of each covariate and fold. This plot represents the variability in marginal effects across folds,
+
+```{r}
+marg <- dplyr::filter(marg, i==1)
+
+ggplot(marg, aes(x, predicted, group = var_fold)) + 
+  geom_line() + 
+  facet_wrap(~ cov_name) + 
+  xlab("Covariate value") + 
+  ylab("Predicted") + 
+  theme_bw()
+```
+
+Similarly, we could add uncertainty from each fold using `geom_ribbon()`. The standard errors and confidence intervals are also stored in the returned dataframe, 
+
+```{r}
+marg$std.error # standard error
+marg$conf.low # lower 95% CI
+marg$conf.high # upper 95% CI
 ```
 
 ## Non-parametric examples

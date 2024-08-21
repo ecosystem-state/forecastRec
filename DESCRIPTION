@@ -1,6 +1,6 @@
 Package: predRecruit
 Title: Package For Predicting Recruitment
-Version: 0.3.0
+Version: 0.4.0
 Authors@R:
     person("Eric", "Ward", , "eric.ward@noaa.gov", role = c("aut", "cre"),
            comment = c(ORCID = "0000-0002-4359-0296"))
@@ -8,7 +8,7 @@ Description: This package contains simple functions for automating predictions o
 License: GPL (>= 3)
 Encoding: UTF-8
 Depends: R (>= 3.5.0)
-Imports: broom, mgcv, stats, glmnet, randomForest, dplyr, tidyr, glmmTMB, ggeffects, ggplot2, tidymodels
+Imports: broom, dplyr, ggeffects, ggplot2, glmnet, mgcv, multilevelmod, randomForest, stats, tidyr, tidymodels, parsnip, purrr, recipes, rsample, tibble, tune, workflows, yardstick
 Suggests:
     testthat,
     knitr,

@@ -3,4 +3,5 @@
 Readme.Rmd
 ^\.github$
 ^doc$
+^docs$
 ^Meta$
